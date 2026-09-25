@@ -1,0 +1,320 @@
+{% extends "base.html" %}
+
+{% block title %}แต่งกลอนแปด{% endblock %}
+{% block active_poem %}active{% endblock %}
+{% block content %}
+    <div class="container">
+      <div class="main-col">
+        <div class="header">
+          <h1>แต่งกลอนแปด</h1>
+        </div>
+        <p class="subtitle">
+          วางบทกลอนแล้วกด "วิเคราะห์" — ระบบจะตรวจฉันทลักษณ์และไฮไลท์คำสัมผัส
+        </p>
+
+        <div class="input-card">
+          <textarea
+            id="poemInput"
+            placeholder="วางบทกลอนที่นี่ เช่น&#10;โอ้ว่าน่าเสียดายหลายประการ   เพราะเหตุการณ์ร้ายกาจอาจผ่านพ้น&#10;ใจหนึ่งรักอีกใจหนึ่งหมดจน   ความฝันปลิวลมพ้นจากอกเรา"
+          ></textarea>
+          <div class="controls">
+            <!-- <button class="btn-primary" id="analyzeBtn" onclick="analyze()">วิเคราะห์</button> วิเคราะห์จ้าาาาาา-->
+            <button class="btn-ghost" onclick="clearAll()">ล้าง</button>
+            <label class="check-label">
+              <input type="checkbox" id="showDiagram" checked /> แสดงแผนผัง
+            </label>
+          </div>
+        </div>
+
+        <div class="legend">
+          <div class="legend-item">
+            <span class="swatch" style="background: #5b9cf6"></span> สัมผัสนอก
+          </div>
+          <div class="legend-item">
+            <span class="swatch" style="background: #4ecb8d"></span>
+            สัมผัสระหว่างบท
+          </div>
+          <div class="legend-item">
+            <span class="swatch" style="background: #ff6b7a"></span>
+            สัมผัสไม่ตรง
+          </div>
+        </div>
+        <div id="result"></div>
+      </div>
+      <!-- end main-col -->
+      <div class="side-col">
+        <!--tag คำพ้อง-->
+        <div class="input-card">
+          <div
+            style="
+              font-size: 0.8rem;
+              font-weight: 600;
+              color: var(--accent);
+              text-transform: uppercase;
+              letter-spacing: 0.8px;
+              margin: -20px -20px 12px -20px;
+              padding: 12px 20px;
+              background: var(--surface2);
+              border-radius: var(--radius) var(--radius) 0 0;
+              border-bottom: 1px solid var(--border);
+            "
+          >
+            คำไวพจน์ที่แนะนำ
+          </div>
+          <div
+            id="synonymSuggestions"
+            style="display: flex; flex-wrap: wrap; gap: 6px"
+          >
+            <!-- จะ populate ทีหลัง -->
+          </div>
+        </div>
+      </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+      ////อันนี้จะทำไฮไลท์ให้มันแสดงคำไวพจน์ในระบบ จุด 1
+      // ── Synonym lookup ──
+      document
+        .getElementById("poemInput")
+        .addEventListener("keydown", function (e) {
+          if (e.key === "Tab") {
+            e.preventDefault();
+            document.execCommand("insertText", false, "\t");
+          }
+        });
+
+      let _savedSel = { start: 0, end: 0 };
+
+      document
+        .getElementById("poemInput")
+        .addEventListener("mouseup", function () {
+          //บันทึกตำแหน่งคำตอบกดคลุมไฮไลท์คำ
+          const selected = window.getSelection().toString().trim();
+          if (selected) {
+            _savedSel = { start: this.selectionStart, end: this.selectionEnd };
+            window.fetchSynonyms(selected);
+          }
+        });
+
+      function replaceSelection(word) {
+        //แทนที่คำหลังกด tag
+        const ta = document.getElementById("poemInput");
+        ta.focus();
+        ta.setSelectionRange(_savedSel.start, _savedSel.end);
+        document.execCommand("insertText", false, word);
+      }
+
+      window.fetchSynonyms = async function (word) {
+        const box = document.getElementById("synonymSuggestions");
+        box.innerHTML = `<span style="color:var(--muted);font-size:0.85rem">กำลังโหลด…</span>`;
+        try {
+          const res = await fetch(
+            `/api/synonym?word=${encodeURIComponent(word)}`,
+          );
+          const data = await res.json();
+          if (!data.synonyms || !data.synonyms.length) {
+            box.innerHTML = `<span style="color:var(--muted);font-size:0.85rem">ไม่พบคำไวพจน์</span>`;
+            return;
+          }
+          const recommended = new Set(data.recommended || []); //แยกคำแนะนำกับปกติไวพจน์
+          const sorted = [...data.synonyms].sort((a, b) =>
+            a.localeCompare(b, "th"),
+          );
+          const recList = sorted.filter((s) => recommended.has(s));
+          const restList = sorted.filter((s) => !recommended.has(s));
+          box.innerHTML = [...recList, ...restList]
+            .map(
+              (
+                s, //อันนี้แยกเป็น 2 filter สีคำแนะนำ
+              ) =>
+                `<span class="syn-tag${recommended.has(s) ? " syn-recommended" : ""}" onclick="replaceSelection('${s.replace(/'/g, "&#39;")}')">${s}</span>`,
+            )
+            .join(""); // เอาไว้บนสุดจบ 7
+        } catch (e) {
+          box.innerHTML = `<span style="color:var(--err);font-size:0.85rem">โหลดไม่ได้</span>`;
+        }
+      }; //ถึงตรงนี้ของจุดที่ 1
+
+      // ── Auto-analyze (trigger after first complete แถว, then per วรรค) ──
+      let autoTimer = null; //real-time checking
+      let lastStanzas = null;
+
+      document
+        .getElementById("poemInput")
+        .addEventListener("input", function () {
+          clearTimeout(autoTimer);
+          const text = this.value;
+          const trimmed = text.trim();
+
+          if (!trimmed) {
+            document.getElementById("result").innerHTML = "";
+            return;
+          }
+
+          const lines = text.split("\n");
+          const firstLine = lines[0];
+          // ตรวจว่าเริ่มพิมพ์วรรคที่ 2 แล้ว (มีตัวอักษรหลัง separator: tab หรือ 2+ spaces)
+          const waks = firstLine.split(/\t|\s{2,}/);
+          const startedWak2 = waks.length >= 2 && waks[1].trim().length > 0;
+
+          // หรือมีบรรทัดที่ 2 แล้ว (กรณีพิมพ์ต่อ)
+          const hasSecondLine =
+            lines.length >= 2 && firstLine.trim().length > 0;
+
+          if (startedWak2 || hasSecondLine) {
+            autoTimer = setTimeout(analyze, 100);
+          }
+        });
+      // ── Render helpers ──
+      function renderWord(w) {
+        if (!w.word) return "";
+        const cls = w.cls ? ` class="${w.cls}"` : "";
+        const tip = w.tip ? ` data-tip="${w.tip.replace(/"/g, "&quot;")}"` : "";
+        return `<span${cls}${tip}>${w.word}</span>`;
+      }
+      function renderHalf(annotated) {
+        return annotated.map(renderWord).join(" ");
+      }
+      function statusIcon(ok) {
+        return ok
+          ? `<span style="color:var(--ok)">✓</span>`
+          : `<span style="color:var(--err)">✗</span>`;
+      }
+      function renderStanza(st, nextSt) {
+        const pairs = [
+          [0, 1],
+          [2, 3],
+        ];
+        let html = `<div class="stanza"><div class="stanza-num">บทที่ ${st.index + 1}</div>`;
+        pairs.forEach(([li, ri]) => {
+          //annotations เป็นคำที่ไม่สัมผัสกันขีดเส้นใต้สีแดง
+          html += `<div class="line-row">
+      <span class="half">${renderHalf(st.annotations[li])}</span> 
+      <span class="half-divider">┃</span>
+      <span class="half">${renderHalf(st.annotations[ri])}</span>
+    </div>`;
+        });
+        const hasIssues = st.issues.length > 0;
+        html += `<div class="rhyme-report ${hasIssues ? "has-issues" : "all-ok"}">`;
+        if (hasIssues) {
+          html += `<h3>ข้อสังเกต</h3>`;
+          st.issues.forEach((iss) => {
+            const cls = iss.type === "err" ? "err-msg" : "warn-msg";
+            const icon = iss.type === "err" ? "✗" : "⚠";
+            html += `<div class="${cls}">${icon} ${iss.message}</div>`;
+          });
+        } else {
+          html += `<div class="ok-msg">✓ ฉันทลักษณ์ถูกต้อง</div>`;
+        }
+        html += `</div>`;
+        if (document.getElementById("showDiagram").checked) {
+          const [A, B, C, D] = st.last_syls.map((w) => w || "—");
+          const { nok_ok: nokOk, ir1, ir3 } = st;
+          const ir1Word = ir1.ok
+            ? st.halves[1].syllables[ir1.recv_idx] || "?"
+            : "?";
+          const ir3Word = ir3.ok
+            ? st.halves[3].syllables[ir3.recv_idx] || "?"
+            : "?";
+          // ── คำสัมผัสระหว่างบท: คำแรกของวรรครับ บทถัดไป ──
+          // const nextH2Word = nextSt
+          //   ? nextSt.halves[1].syllables[0] || "?"
+          //   : null;
+          const nextH2Syls = nextSt ? nextSt.halves[1].syllables : null;
+          const nextH2Word =
+            nextH2Syls && nextH2Syls.length
+              ? nextH2Syls[nextH2Syls.length - 1]
+              : null;
+          const carryCellHtml = nextSt
+            ? `<span class="r-carry-recv">${D}</span> → <span class="r-carry-recv">${nextH2Word}</span> (ท้ายวรรครับบทถัดไป) ${statusIcon(nextSt.carry_ok)}`
+            : `<span class="r-son">${D}</span> <span style="color:var(--muted);font-size:0.8rem">(บทสุดท้าย — ไม่มีบทถัดไป)</span>`;
+          html += `<div class="diagram"><h3>แผนผังสัมผัส</h3>
+      <table>
+        <tr>
+          <td>สัมผัสนอก</td>
+          <td><span class="r-sut">${A}</span> → <span class="r-ton">${ir1Word}</span> (คำที่ ${ir1.ok ? ir1.recv_idx + 1 : "?"} วรรครับ) ${statusIcon(ir1.ok)}</td>
+        </tr>
+        <tr>
+          <td>สัมผัสนอก</td>
+          <td><span class="r-nai">${B}</span> ↔ <span class="r-nai">${C}</span> ${statusIcon(nokOk)}</td>
+        </tr>
+        <tr>
+          <td>สัมผัสนอก</td>
+          <td><span class="r-nai">${C}</span> → <span class="r-ton">${ir3Word}</span> (คำที่ ${ir3.ok ? ir3.recv_idx + 1 : "?"} วรรคส่ง) ${statusIcon(ir3.ok)}</td>
+        </tr>
+        <tr>
+          <td>ระหว่างบท</td>
+          <td>
+            ${carryCellHtml}
+          </td>
+        </tr>
+      </table>
+    </div>`;
+        }
+        return html + "</div>";
+      }
+      async function analyze() {
+        const text = document.getElementById("poemInput").value.trim();
+        if (!text) {
+          document.getElementById("result").innerHTML = "";
+          return;
+        }
+        // const btn = document.getElementById('analyzeBtn');
+        // btn.textContent = 'กำลังวิเคราะห์…';
+        // btn.disabled = true;
+        try {
+          const res = await fetch("/api/poem/analyze", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            document.getElementById("result").innerHTML =
+              `<div style="color:var(--err);
+        padding:16px;
+        background:var(--surface);
+        border-radius:var(--radius)">เกิดข้อผิดพลาด: ${err.error || res.statusText}</div>`;
+            return;
+          }
+          const data = await res.json();
+          lastStanzas = data.stanzas;
+          // document.getElementById("result").innerHTML = data.stanzas
+          //   .map(renderStanza)
+          //   .join("");
+          document.getElementById("result").innerHTML = data.stanzas
+            .map((st, i) => renderStanza(st, data.stanzas[i + 1]))
+            .join("");
+        } catch (e) {
+          document.getElementById("result").innerHTML =
+            `<div style="color:var(--err);
+      padding:16px;
+      background:var(--surface);
+      border-radius:var(--radius)">ไม่สามารถเชื่อมต่อ API ได้: ${e.message}</div>`;
+        } finally {
+          // btn.textContent = 'วิเคราะห์';
+          // btn.disabled = false;////////////ปุ่มจ้าาาาาา
+        }
+      }
+      document
+        .getElementById("showDiagram")
+        .addEventListener("change", function () {
+          if (lastStanzas) {
+            // document.getElementById("result").innerHTML = lastStanzas
+            //   .map(renderStanza)
+            //   .join("");
+            document.getElementById("result").innerHTML = lastStanzas
+              .map((st, i) => renderStanza(st, lastStanzas[i + 1]))
+              .join("");
+          }
+        });
+      function clearAll() {
+        document.getElementById("poemInput").value = "";
+        document.getElementById("result").innerHTML = "";
+        document.getElementById("synonymSuggestions").innerHTML = "";
+        lastStanzas = null;
+      }
+    </script>
+{% endblock %}

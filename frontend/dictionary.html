@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}ตารางแสดงคำศัพท์{% endblock %}
+{% block active_dict %}active{% endblock %}
+{% block content %}
+
+<div class="page">
+  <div class="page-header">
+    <h1>ตารางแสดงคำศัพท์</h1>
+    <p>รายการคำและคำพ้องทั้งหมดในระบบ — คลิกที่คำเพื่อคัดลอก</p>
+  </div>
+
+  <div class="filter-wrap">
+    <input class="filter-input" id="filter" type="text" placeholder="กรองคำ…" autocomplete="off" />
+    <span class="filter-icon">⌕</span>
+  </div>
+
+  <div class="stats">
+    <span>แสดงผล</span>
+    <span class="stats-count" id="countBadge">—</span> <!--จำนวนคำ 551-->
+    <span>รายการ</span>
+    <select class="sort-select" id="sortSelect" onchange="applyFilter()">
+      <option value="asc">เรียงตามตัวอักษร ก - ฮ</option>
+      <option value="desc">เรียงตามตัวอักษร ฮ - ก</option>
+    </select>
+  </div>
+
+  <div class="table-card">
+    <table>
+      <thead>
+        <tr>
+          <th>คำหลัก</th>
+          <th>คำพ้อง</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="2"><div class="placeholder loading-dots">กำลังโหลด</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  const dark = t === 'dark';
+  document.getElementById('themeIcon').textContent  = dark ? '☀' : '🌙';
+  document.getElementById('themeLabel').textContent = dark ? 'โหมดสว่าง' : 'โหมดมืด';
+  localStorage.setItem('thai-theme', t);
+}
+function toggleTheme() {
+  applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+}
+applyTheme(localStorage.getItem('thai-theme') || 'dark');/////////
+
+let allEntries = [];
+
+const thaiCollator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });////////
+
+function copyTag(el, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    el.classList.add('copied');
+    setTimeout(() => el.classList.remove('copied'), 900); 
+  });
+}
+
+function render(entries) {
+  const tbody = document.getElementById('tbody');
+  document.getElementById('countBadge').textContent = entries.length;
+  if (!entries.length) {
+    tbody.innerHTML = `<tr><td colspan="2"><div class="placeholder">ไม่พบผลลัพธ์</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = entries.map(e => {
+    const wordClass = e.matched ? ' word-match' : '';
+    const sortedSynonyms = [...e.synonyms].sort((a, b) => thaiCollator.compare(a, b));
+    const tags = sortedSynonyms.map(s =>
+      `<span class="syn-tag" onclick="copyTag(this,'${s.replace(/'/g,"&#39;")}')">${s}</span>`
+    ).join('');
+    return `<tr><td class="${wordClass}">${e.word}</td><td><div class="syn-tags">${tags}</div></td></tr>`;
+  }
+).join('');
+}
+
+function applyFilter() { 
+  const q    = document.getElementById('filter').value.trim();
+  const qLow = q.toLowerCase();
+  const dir  = document.getElementById('sortSelect').value;
+
+  let entries;
+  if (!q) {
+    entries = allEntries.map(e => ({ word: e.word, synonyms: e.synonyms, matched: false }));
+  } else {
+    entries = [];
+    for (const e of allEntries) {
+      if (e.word.toLowerCase().startsWith(qLow)) {
+        entries.push({ word: e.word, synonyms: e.synonyms, matched: true });
+      } else {
+        const synMatch = e.synonyms.find(s => s.toLowerCase().startsWith(qLow));
+        if (synMatch) {
+          const rest = [e.word, ...e.synonyms.filter(s => s !== synMatch)];
+          entries.push({ word: synMatch, synonyms: rest, matched: true });
+        }
+      }
+    }
+  }
+
+  entries.sort((a, b) => {
+    if (q) {
+      const aExact = a.word.toLowerCase() === qLow;
+      const bExact = b.word.toLowerCase() === qLow;
+      const aStart = a.word.toLowerCase().startsWith(qLow);
+      const bStart = b.word.toLowerCase().startsWith(qLow);
+      if (aExact !== bExact) return aExact ? -1 : 1;
+      if (aStart !== bStart) return aStart ? -1 : 1;
+    }
+    /*const cmp = a.word.localeCompare(b.word, 'th');
+    return dir === 'asc' ? cmp : -cmp;*/
+    const cmp = thaiCollator.compare(a.word, b.word);
+    return dir === 'asc' ? cmp : -cmp;
+  });
+  render(entries);
+}
+
+document.getElementById('filter').addEventListener('input', applyFilter);
+
+fetch('/api/dictionary')
+  .then(r => r.json())
+  .then(data => { allEntries = data; applyFilter(); })
+  .catch(err => {
+    document.getElementById('tbody').innerHTML =
+      `<tr><td colspan="2"><div class="placeholder" style="color:var(--err)">โหลดข้อมูลไม่ได้: ${err.message}</div></td></tr>`;
+  });
+</script>
+{% endblock %}

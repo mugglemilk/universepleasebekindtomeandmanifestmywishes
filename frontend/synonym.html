@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}คำพ้องความหมาย{% endblock %}
+{% block active_home %}active{% endblock %}
+
+{% block content %}
+
+<div class="hero">
+  <div class="avatar">
+    <span class="avatar-title">พ้อง</span>
+    <span class="avatar-sub">ความหมาย</span>
+  </div>
+
+  <div class="nav-btns">
+    <a class="nav-pill" href="/dictionary">
+      <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+      </svg>
+      ตารางแสดงคำศัพท์
+    </a>
+
+    <a class="nav-pill" href="/poem">
+      <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round">
+          <path d="M12 20h9"/>
+          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+      </svg>
+      แต่งกลอนแปด
+    </a>
+  </div>
+
+  <div class="search-wrap">
+    <input class="search-input" id="wordInput" type="text"
+      placeholder="พิมพ์คำที่ค้นหาที่นี่ . . ." autocomplete="off" />
+    <span class="search-icon">⌕</span>
+  </div>
+
+  <p class="search-hint" id="hint">คลิกที่ข้อความเพื่อคัดลอก</p>
+
+  <div class="results" id="results"></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+
+<script>
+
+let timer;//รอ search input 300ms ก่อนค่อย lookup เพื่อไม่ให้ lookup บ่อยเกินไป
+const input   = document.getElementById('wordInput');//ตัวแปรอ้างอิงช่องกรอกข้อความ (Input Box)
+const results = document.getElementById('results');// ตัวแปรอ้างอิงกล่องแสดงผลลัพธ์คำพ้อง
+const hint    = document.getElementById('hint');// ตัวแปรอ้างอิงข้อความคำแนะนำใต้ช่องค้นหา
+
+function lookup(word) {//ฟังก์ชันหลักสำหรับค้นหาคำพ้องความหมาย
+  word = word.trim();// ทำความสะอาดข้อความ ตัดช่องว่างหัว-ท้ายทิ้ง
+
+  if (!word) {
+    results.innerHTML = '';
+    hint.textContent = 'คลิกที่ข้อความเพื่อคัดลอก';
+    return;
+  }
+
+  hint.textContent = 'กำลังค้นหา…';
+
+  fetch(`/api/synonym?word=${encodeURIComponent(word)}`)
+  // ติดต่อสื่อสารกับ Backend ผ่าน Fetch API (ส่ง GET Request)
+  // - ตัวแปรที่ส่งไปหลังบ้าน: ส่งพารามิเตอร์ชื่อ 'word' แนบไปกับ Query String
+  // - วิธีส่ง: ใช้ encodeURIComponent(word) แปลงภาษาไทย/อักขระพิเศษให้อยู่ในรูปแบบ URL-safe
+  // - เส้นทางหลังบ้าน (Backend Endpoint): /api/synonym?word=... (เชื่อมไปที่ไฟล์ app.py ของเซิร์ฟเวอร์)
+    .then(r => r.json())// แปลงข้อมูล Response ที่หลังบ้านส่งกลับมาให้อยู่ในรูป JSON Object
+    .then(data => {// <-- data ตรงนี้แหละคือข้อมูลที่ routes.py ส่ง jsonify กลับมา
+      // หลังจากนั้น เราก็เอาตัวแปร data มาดึงค่าไปใช้งานต่อ เช่น:
+      // data.word        -> ได้คำที่ค้นหา
+      // data.synonyms    -> ได้อาเรย์คำพ้อง
+      // data.recommended -> ได้อาเรย์คำแนะนำพิเศษ
+      if (data.error || !data.synonyms?.length) {// ตรวจสอบว่าหลังบ้านเจอคำพ้องหรือไม่ หรือมี Error กลับมาไหม
+        results.innerHTML = `<div class="empty-msg">ไม่พบคำพ้องสำหรับ "<strong>${word}</strong>"</div>`;
+        hint.textContent = '';
+        return;
+      }
+
+      hint.textContent = 'คลิกที่คำเพื่อคัดลอก';// ถ้าเจอข้อมูล ปรับข้อความคำแนะนำให้ผู้ใช้รู้ว่าคลิกคำเพื่อก๊อปปี้ได้
+
+      results.innerHTML =
+      // สร้างโครงสร้าง HTML สำหรับแสดงหัวข้อและป้ายคำพ้อง (Tags)
+      // - data.word คือคำที่ค้นหาจากหลังบ้าน
+      // - data.synonyms คืออาเรย์ (Array) ของรายการคำพ้องความหมาย
+        `<div class="result-header">คำพ้องของ <strong>${data.word}</strong> — ${data.synonyms.length} คำ</div>` +
+        `<div class="tags">${data.synonyms.map(s =>
+          `<span class="tag" onclick="copyTag(this,'${s.replace(/'/g,"&#39;")}')">${s}</span>`
+        ).join('')}</div>`;
+    })
+    .catch(() => {
+      // ดักจับ Error กรณีอินเทอร์เน็ตหลุดหรือเซิร์ฟเวอร์หลังบ้านล่ม
+      results.innerHTML = `<div class="empty-msg" style="color:var(--err)">เชื่อมต่อ API ไม่ได้</div>`;
+      hint.textContent = '';
+    });
+}
+
+function copyTag(el, text) {//ฟังก์ชันคัดลอกคำไวพจน์ลงคลิปบอร์ด
+  navigator.clipboard.writeText(text).then(() => {// ใช้ Web Clipboard API บันทึกข้อความลงคลิปบอร์ดของผู้ใช้
+    el.classList.add('copied');// เพิ่มคลาส CSS ทำอนิเมชันตอบสนองว่าคัดลอกแล้ว
+    setTimeout(() => el.classList.remove('copied'), 900);// เอาคลาสออกหลังผ่านไป 900ms
+  });
+}
+//ดักจับตอนกำลังพิมพ์ - รอให้พิมพ์เสร็จ
+input.addEventListener('input', () => {//การดักจับพฤติกรรมผู้ใช้ (Event Listeners)
+  clearTimeout(timer);//รอ search input 300ms ก่อนค่อย lookup เพื่อไม่ให้ lookup บ่อยเกินไป
+  timer = setTimeout(() => lookup(input.value), 300);// ตั้งเวลาหน่วง (Debounce) 300 มิลลิวินาที ให้ผู้ใช้พิมพ์ให้เสร็จก่อน แล้วค่อยเรียกฟังก์ชัน lookup()
+});
+//ดักจับตอนกดตกลง - ไม่ต้องรอแล้ว
+input.addEventListener('keydown', e => {// ดักจับการกดปุ่มบนคีย์บอร์ด
+  if (e.key === 'Enter') {// ถ้าผู้ใช้กดปุ่ม 'Enter'
+    clearTimeout(timer);// ยกเลิกเวลานับถอยหลัง 300ms ทิ้งทันที
+    lookup(input.value);// สั่งค้นหาข้อมูลทันทีโดยไม่ต้องรอ
+  }
+});
+
+</script>
+
+{% endblock %}
